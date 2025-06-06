@@ -97,7 +97,7 @@ void loop() {
 
   // 4) Horizontal bar fill at the very top (0–20 PSI → 0–120 px)
   const uint8_t BAR_X      = 6;
-  const uint8_t BAR_Y      = 16;    // moved from 52 up to 4
+  const uint8_t BAR_Y      = 16;    
   const uint8_t BAR_MAX_W  = 116;
   const uint8_t BAR_HEIGHT = 8;
   int barW = map(psiMap, 0, 20, 0, BAR_MAX_W);
