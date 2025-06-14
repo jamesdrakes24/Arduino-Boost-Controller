@@ -84,8 +84,8 @@ const float ADC_MAX     = 1023.0f;
 const float BAR_TO_PSI  = 14.5038f;   // 1 bar = 14.5038 PSI
 
 // Sensor calibration (–1 bar @ 0.045 V; +2 bar @ 5.000 V)
-const float SENSOR_VMIN      = 0.045f;
-const float SENSOR_VMAX      = 5.0f;
+const float SENSOR_VMIN      = 0.55f;
+const float SENSOR_VMAX      = 4.5f;
 const float SENSOR_PMIN_BAR  = -1.0f;
 const float SENSOR_PMAX_BAR  =  2.0f;
 const float SENSOR_SLOPE     = (SENSOR_VMAX - SENSOR_VMIN) / (SENSOR_PMAX_BAR - SENSOR_PMIN_BAR);
