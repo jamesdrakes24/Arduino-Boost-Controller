@@ -78,37 +78,32 @@ const uint8_t MAP_PIN = A0;   // GlowShift sender → 0–3 V out
 const uint8_t SOL_PIN = 9;    // MOSFET gate → boost solenoid
 
 // ── ADC & reference ──
-const float VCC     = 5.0f;   // feeding both Arduino AREF and sender
-const float ADC_MAX = 1023.0f;
+const float VCC     = 5.0f;   // feeding both Arduino AREF and sender (ADC_AVDD)
+const float ADC_MAX = 1023.0f; // 10-bit ADC
 
-// ── Nominal V→PSI lookup (0–3 V ↔ –14.7…+29 PSI) ──
-const int   N_CAL     = 7;
-const float calV[N_CAL]   = { 0.0f,  0.5f,   1.0f,   1.5f,  2.0f,   2.5f,  3.0f };
-const float calPSI[N_CAL] = {-14.7f, -7.35f,  0.0f,   7.25f, 14.5f,  21.75f, 29.0f };
+// ── YOUR PROVEN CALIBRATION ──
+// 0 bar @ ADC=587 ; 1 bar @ ADC=1218  → Δcounts=631 counts/bar
+const float ADC_ZERO     = 587.0f;    // counts at 0 bar
+const float ADC_PER_BAR  = 631.0f;    // counts per bar
+const float PSI_PER_BAR  = 14.504f;   // exact conversion 1 bar→14.504 PSI
 
-// ── Your measured two-point calibration ──
-//   At true 0 PSI (engine off) you measured raw_psi = –4 → need +4 offset
-//   At true –16 PSI (idle)   you measured raw_psi = –11 → need gain so (–11+4)*gain=–16
-const float CAL_OFFSET =  4.0f;            // shifts –4→0
-const float CAL_GAIN   = 16.0f / 7.0f;     // ≈2.2857
-
-// ── Bar-graph params (unchanged) ──
+// ── Bar-graph params ──
 const int     BAR_SCALE_MAX_PSI = 30;
-const uint8_t BAR_X      = 6, BAR_Y = 16, BAR_MAX_W = 116, BAR_HEIGHT = 8;
+const uint8_t BAR_X      = 6,
+              BAR_Y      = 16,
+              BAR_MAX_W  = 116,
+              BAR_HEIGHT = 8;
 
 void setup() {
-  // — Serial for live laptop output —
   Serial.begin(115200);
-  analogReference(DEFAULT);     // compare sensor → same 5 V rail
-
-  // — OLED & solenoid init —
+  analogReference(DEFAULT);    // ADC_AVDD ≈5 V
   u8g2.begin();
   pinMode(SOL_PIN, OUTPUT);
   analogWrite(SOL_PIN, 0);
 }
 
 void loop() {
-  // [1] 8× oversample pot → 5–15 PSI set-point
+  // [1] Read & oversample pot → set-point (5–15 PSI)
   float potSum = 0;
   for (int i = 0; i < 8; i++) {
     potSum += analogRead(POT_PIN);
@@ -116,44 +111,32 @@ void loop() {
   }
   int psiSet = map(int(potSum / 8.0f), 0, 1023, 5, 15);
 
-  // [2] 8× oversample MAP → voltage (0–3 V)
+  // [2] Read & oversample MAP → raw ADC count
   float mapSum = 0;
   for (int i = 0; i < 8; i++) {
     mapSum += analogRead(MAP_PIN);
     delay(2);
   }
-  float Vout = (mapSum / 8.0f) * (VCC / ADC_MAX);
+  float rawADC = mapSum / 8.0f;
 
-  // → clamp & find table segment
-  float V = constrain(Vout, calV[0], calV[N_CAL-1]);
-  int idx = 0;
-  while (idx < N_CAL-1 && V > calV[idx+1]) idx++;
+  // [3] Convert counts → bar → PSI
+  float bar = (rawADC - ADC_ZERO) / ADC_PER_BAR;
+  float psi = bar * PSI_PER_BAR;
+  psi = constrain(psi, -14.7f, 29.0f);
+  int psiMap = (psi >= 0) ? int(psi + 0.5f) : int(psi - 0.5f);
 
-  // → piecewise interpolate raw PSI
-  float psiRaw = calPSI[idx]
-               + (calPSI[idx+1] - calPSI[idx])
-               * (V - calV[idx])
-               / (calV[idx+1] - calV[idx]);
-
-  // [3] apply your two-point trim
-  float psiCal = (psiRaw + CAL_OFFSET) * CAL_GAIN;
-
-  // → round for display/PWM
-  int psiMap = psiCal >= 0
-               ? int(psiCal + 0.5f)
-               : int(psiCal - 0.5f);
-
-  // [4] PWM control (same simple P-controller)
+  // [4] Simple P-controller → PWM to solenoid
   float error = psiSet - psiMap;
   int duty = constrain(int((error / 15.0f) * 255.0f), 0, 255);
   analogWrite(SOL_PIN, duty);
 
-  // [5] OLED redraw (unchanged)
+  // [5] Draw OLED
   u8g2.clearBuffer();
   u8g2.drawXBMP(0, 0, 128, 64, epd_bitmap_boostguage);
 
-  int barW = psiMap > 0
-           ? map(constrain(psiMap,0,BAR_SCALE_MAX_PSI), 0, BAR_SCALE_MAX_PSI, 0, BAR_MAX_W)
+  int barW = (psiMap > 0)
+           ? map(constrain(psiMap, 0, BAR_SCALE_MAX_PSI),
+                 0, BAR_SCALE_MAX_PSI, 0, BAR_MAX_W)
            : 0;
   u8g2.drawBox(BAR_X, BAR_Y, barW, BAR_HEIGHT);
 
@@ -170,12 +153,12 @@ void loop() {
 
   u8g2.sendBuffer();
 
-  // [6] Serial output for laptop
-  // Format:  Vout:0.123 V, PSI:-0.4
-  Serial.print("Vout:");
+  // [6] Serial for logging
+  float Vout = rawADC * (VCC / ADC_MAX);
+  Serial.print("Vout: ");
   Serial.print(Vout, 3);
-  Serial.print(" V,  PSI:");
-  Serial.println(psiCal, 1);
+  Serial.print(" V, PSI: ");
+  Serial.println(psi, 1);
 
-  delay(100);  // 10 Hz update
+  delay(100);  // 10 Hz
 }
